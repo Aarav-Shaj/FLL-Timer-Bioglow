@@ -163,7 +163,7 @@ class ControlWindow(QWidget):
         self.air_label = QLabel()
         self.air_label.setProperty("role", "caption")
         root.addWidget(self.air_label)
-        hint = QLabel("Space start / abort   R reset   Cmd+1-9 select table")
+        hint = QLabel("Space start / abort   R reset   Ctrl+1-9 select table")
         hint.setProperty("role", "caption")
         hint.setWordWrap(True)
         root.addWidget(hint)

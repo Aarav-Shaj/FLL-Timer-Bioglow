@@ -1,7 +1,8 @@
-"""Match sound effects, played through macOS afplay (no extra dependencies)."""
+"""Match sound effects (Qt Multimedia: works on Windows, with volume and instant stop)."""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QProcess
+from PySide6.QtCore import QObject, QUrl
+from PySide6.QtMultimedia import QSoundEffect
 
 from .theme import SOUNDS_DIR
 
@@ -21,33 +22,29 @@ class SoundPlayer(QObject):
         super().__init__(parent)
         self.volume = 80
         self.muted = False
-        self._procs: list[QProcess] = []
+        self._effects: dict[str, QSoundEffect] = {}
+        for key, (_label, _desc, filename) in SOUNDS.items():
+            path = SOUNDS_DIR / filename
+            if path.exists():
+                effect = QSoundEffect(self)
+                effect.setSource(QUrl.fromLocalFile(str(path)))
+                self._effects[key] = effect
+
+    def available(self, key: str) -> bool:
+        return key in self._effects
 
     def play(self, key: str, force: bool = False) -> None:
         """Play a sound, cutting off anything still playing so sounds never overlap.
         `force` bypasses mute (used by the preview button)."""
         if self.muted and not force:
             return
-        self.stop_all()
-        path = SOUNDS_DIR / SOUNDS[key][2]
-        if not path.exists():
+        effect = self._effects.get(key)
+        if effect is None:
             return
-        proc = QProcess(self)
-        proc.finished.connect(lambda *_: self._reap(proc))
-        proc.start("/usr/bin/afplay", ["-v", f"{max(0, self.volume) / 100:.2f}", str(path)])
-        self._procs.append(proc)
-
-    def available(self, key: str) -> bool:
-        return (SOUNDS_DIR / SOUNDS[key][2]).exists()
+        self.stop_all()
+        effect.setVolume(max(0, min(100, self.volume)) / 100)
+        effect.play()
 
     def stop_all(self) -> None:
-        for p in list(self._procs):
-            p.kill()
-
-    def _reap(self, proc: QProcess) -> None:
-        if proc in self._procs:
-            self._procs.remove(proc)
-        try:
-            proc.deleteLater()
-        except RuntimeError:       # already destroyed during shutdown
-            pass
+        for effect in self._effects.values():
+            effect.stop()

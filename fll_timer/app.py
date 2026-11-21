@@ -4,7 +4,7 @@ import sys
 
 from PySide6.QtCore import QDir, QLockFile
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from . import theme
 from .audio import SoundPlayer
@@ -13,31 +13,36 @@ from .model import AppModel
 from .webserver import Hub, StateBridge, WebServer
 
 
-_activity = None  # keep a reference so the activity token isn't released
-
-
-def _disable_app_nap() -> None:
-    """Stop macOS from throttling this app when its windows are covered or in the
-    background, so OBS keeps receiving frames from the presentation window."""
-    global _activity
+def _keep_running_in_background() -> None:
+    """Windows 11 can throttle timers of background/minimised apps (EcoQoS) and the default
+    timer tick is ~15 ms. Opt out of both so the clocks stay accurate while OBS has focus."""
+    if sys.platform != "win32":
+        return
     try:
-        from Foundation import NSProcessInfo
-        user_initiated = 0x00EFFFFF            # NSActivityUserInitiatedAllowingIdleSystemSleep
-        latency_critical = 0xFF00000000        # NSActivityLatencyCritical
-        _activity = NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
-            user_initiated | latency_critical, "Live timer output for OBS")
+        import ctypes
+        from ctypes import wintypes
+
+        class PowerThrottling(ctypes.Structure):
+            _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG),
+                        ("StateMask", wintypes.ULONG)]
+
+        state = PowerThrottling(1, 1, 0)          # EXECUTION_SPEED controlled, throttling OFF
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetProcessInformation(kernel32.GetCurrentProcess(), 4,   # ProcessPowerThrottling
+                                       ctypes.byref(state), ctypes.sizeof(state))
+        ctypes.windll.winmm.timeBeginPeriod(1)
     except Exception:
         pass
 
 
 def main() -> int:
-    _disable_app_nap()
+    _keep_running_in_background()
     app = QApplication(sys.argv)
     # One copy only: a second copy would grab a different port and break the OBS URLs.
     lock = QLockFile(QDir.temp().filePath("fll_timer.lock"))
     lock.setStaleLockTime(0)
     if not lock.tryLock(0):
-        print("FLL Timer is already running.")
+        QMessageBox.information(None, "FLL Timer", "FLL Timer is already running.")
         return 0
     app.setApplicationName("FLL Timer")
     app.setWindowIcon(QIcon(str(theme.LOGO_PATH)))
