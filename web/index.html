@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FLL Timer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --lime:#C6DE94; --leaf:#70A334; --forest:#2C5535; --yellow:#F0E973; --ink:#111921;
+    --red:#E5383B; --bar:#0C1317; --track:#1C2A31; --bg:#00B140;
+  }
+  html, body { margin:0; height:100%; overflow:hidden; background:var(--bg); cursor:none; }
+  body.transparent { background:transparent; }
+  body { font-family:-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif; }
+
+  #stage { position:absolute; width:1920px; height:1080px; transform-origin:0 0; }
+  #bar { position:absolute; left:0; bottom:0; width:1920px; height:184px; background:var(--bar); overflow:hidden; }
+
+  .content { position:absolute; inset:0; --accent:var(--lime); --timer:#fff; }
+  .content.idle    { --accent:var(--leaf); }
+  .content.run     { --accent:var(--lime); }
+  .content.countdown { --accent:var(--yellow); --timer:var(--yellow); }
+  .content.endgame { --accent:var(--yellow); --timer:var(--yellow); }
+  .content.final,
+  .content.done    { --accent:var(--red); --timer:var(--red); }
+
+  .track { position:absolute; left:0; top:0; width:100%; height:9px; background:var(--track); }
+  .fill  { width:100%; height:100%; background:var(--accent); transform-origin:left center; }
+  .logo  { position:absolute; left:51px; top:46px; height:103px; width:auto; }
+  .timer { position:absolute; left:0; top:9px; width:100%; height:175px; display:flex;
+           align-items:center; justify-content:center; font-size:110px; font-weight:900; line-height:1;
+           color:var(--timer); font-variant-numeric:tabular-nums; letter-spacing:0; white-space:nowrap; }
+  .name  { position:absolute; right:51px; top:9px; height:175px; display:flex; align-items:center;
+           font-size:66px; font-weight:900; color:#fff; white-space:nowrap; line-height:1; }
+
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="bar">
+    <div class="content idle" id="content">
+      <div class="track"><div class="fill"></div></div>
+      <img class="logo" src="/assets/bioglow_logo.png" alt="BIOGLOW">
+      <div class="timer">2:30</div>
+      <div class="name"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const BAR_W = 1920, FINAL_SECONDS = 10;
+  const params = new URLSearchParams(location.search);
+  const bg = params.get("bg");
+  if (bg === "transparent") document.body.classList.add("transparent");
+  else if (bg && /^(#[0-9a-f]{3,8}|[a-z]+)$/i.test(bg)) document.documentElement.style.setProperty("--bg", bg);
+
+  // Each table has its own URL: /t/<id>. (No id -> first table.)
+  const TABLE_ID = location.pathname.startsWith("/t/")
+    ? decodeURIComponent(location.pathname.slice(3)).replace(/\/+$/, "") : null;
+
+  const stage = document.getElementById("stage");
+  const content = document.getElementById("content");
+
+  // ---- stage scaling: design at 1920x1080, bottom-anchored in any source size
+  function fit() {
+    const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+    stage.style.transform = `scale(${s})`;
+    stage.style.left = (innerWidth - 1920 * s) / 2 + "px";
+    stage.style.top = (innerHeight - 1080 * s) + "px";
+  }
+  addEventListener("resize", fit); fit();
+
+  // ---- state: the app is the source of truth; we count time locally between messages
+  let S = null;
+  let lastMsg = 0;
+
+  const mine = st => st && (TABLE_ID ? st.tables.find(t => t.id === TABLE_ID) : st.tables[0]);
+
+  function applyState(msg) {
+    const now = performance.now();
+    lastMsg = now;
+    const prev = S;
+    msg.tables.forEach(t => {
+      const p = prev && prev.tables.find(x => x.id === t.id);
+      t.base = t.remaining; t.at = now;
+      // Keep our local baseline for an ongoing run unless the server disagrees noticeably,
+      // so heartbeat jitter can never make a digit step backwards.
+      if (p && t.state === "running" && p.state === "running" && p.run === t.run &&
+          Math.abs(remainingOf(p, now) - t.remaining) < 0.08) { t.base = p.base; t.at = p.at; }
+    });
+    S = msg;
+  }
+
+  // Seconds left in the "3, 2, 1" lead-in (counting down from t.lead to 0).
+  function leadLeft(t, now) { return t.state === "countdown" ? t.base - (now - t.at) / 1000 : 0; }
+
+  function remainingOf(t, now) {
+    if (t.state === "idle") return t.duration;
+    if (t.state === "done") return 0;
+    return Math.max(0, t.base - (now - t.at) / 1000);
+  }
+
+  function view(t, now) {
+    let rem, state = t.state;
+    if (state === "countdown") {
+      const cd = leadLeft(t, now);
+      if (cd > 0) return { text: String(Math.ceil(cd)), phase: "countdown", frac: t.lead ? cd / t.lead : 0 };
+      state = "running";                    // lead-in finished locally (the app confirms moments later)
+      rem = Math.max(0, t.duration + cd);   // cd <= 0: time already elapsed in the match
+    } else {
+      rem = remainingOf(t, now);
+    }
+    if (state === "running" && rem <= 0) state = "done";
+    const secs = state === "running" ? Math.ceil(rem) : Math.round(rem);
+    let phase;
+    if (state === "idle") phase = "idle";
+    else if (state === "done") phase = "done";
+    else if (secs <= FINAL_SECONDS) phase = "final";
+    else if (t.endgame && secs <= t.endgame) phase = "endgame";
+    else phase = "run";
+    const frac = t.duration ? Math.max(0, Math.min(1, rem / t.duration)) : 0;
+    return { text: `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`, phase, frac };
+  }
+
+  // ---- rendering (only touches the DOM when something changed)
+  function fitName(el) {
+    let px = 66;
+    el.style.fontSize = px + "px";
+    while (px > 14 && el.scrollWidth > BAR_W * 0.27) { px -= 2; el.style.fontSize = px + "px"; }
+  }
+
+  const timerEl = content.querySelector(".timer");
+  const fillEl = content.querySelector(".fill");
+  const nameEl = content.querySelector(".name");
+
+  function render() {
+    const t = mine(S);
+    content.style.visibility = t ? "visible" : "hidden";   // table removed in the app -> blank
+    if (!t) return;
+    const v = view(t, performance.now());
+    if (timerEl.textContent !== v.text) timerEl.textContent = v.text;
+    const cls = "content " + v.phase;
+    if (content.className !== cls) content.className = cls;
+    fillEl.style.transform = `scaleX(${v.frac})`;
+    if (nameEl.dataset.text !== t.name) {
+      nameEl.dataset.text = t.name;
+      nameEl.textContent = t.name;
+      fitName(nameEl);
+    }
+  }
+
+  // ---- tell the app when this table is on program in OBS (so Start/Abort act on it)
+  let onAir = false;
+  function report() {
+    const t = mine(S);
+    const id = TABLE_ID || (t && t.id);
+    if (!id) return;
+    fetch("/active", { method: "POST", body: JSON.stringify({ id, active: onAir }), keepalive: true }).catch(() => {});
+  }
+  // Fired by OBS's browser source when the source becomes / stops being visible in the program output.
+  addEventListener("obsSourceActiveChanged", e => { onAir = !!(e.detail && e.detail.active); report(); });
+  setInterval(() => { if (onAir) report(); }, 4000);   // keep-alive; the app expires stale reports
+
+  // ---- connection: SSE with auto-reconnect, plus a polling watchdog
+  function connect() {
+    const es = new EventSource("/events");
+    es.onmessage = e => { try { applyState(JSON.parse(e.data)); } catch (_) {} };
+    es.onerror = () => { /* the browser reconnects on its own; we keep counting locally */ };
+  }
+  setInterval(() => {
+    if (performance.now() - lastMsg > 3000) {
+      fetch("/state", { cache: "no-store" }).then(r => r.json()).then(s => { if (s.tables) applyState(s); }).catch(() => {});
+    }
+  }, 2000);
+
+  (function frame() { render(); requestAnimationFrame(frame); })();
+  connect();
+})();
+</script>
+</body>
+</html>

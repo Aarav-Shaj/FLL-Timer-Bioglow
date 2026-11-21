@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+# unlicensed third-party audio (not redistributed)
+sounds/ftc/
+sounds/countdown_start.wav
+assets/bioglow-styleguide.pdf
