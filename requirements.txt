@@ -1,2 +1,3 @@
 PySide6-Essentials>=6.7
 pyobjc-framework-Cocoa>=10
+websocket-client>=1.6

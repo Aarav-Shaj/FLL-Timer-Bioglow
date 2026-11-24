@@ -10,6 +10,7 @@ from . import theme
 from .audio import SoundPlayer
 from .control import ControlWindow
 from .model import AppModel
+from .obsws import ObsClient
 from .webserver import Hub, StateBridge, WebServer
 
 
@@ -66,6 +67,14 @@ def main() -> int:
     server = WebServer(hub)
     server.start()
     bridge = StateBridge(model, hub)   # noqa: F841  (kept alive by this reference)
+
+    # OBS WebSocket: lets the app know which scene is live (optional; off until enabled in the panel).
+    obs = ObsClient(server.port, app)
+    obs.updated.connect(model.set_obs_state)
+    model.configChanged.connect(lambda: obs.configure(
+        model.obs_enabled, model.obs_host, model.obs_port, model.obs_password))
+    app.aboutToQuit.connect(obs.shutdown)
+    obs.configure(model.obs_enabled, model.obs_host, model.obs_port, model.obs_password)
 
     controls = ControlWindow(model, sounds, server.url)
     controls.move(60, 80)
