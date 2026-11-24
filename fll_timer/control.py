@@ -160,6 +160,30 @@ class ControlWindow(QWidget):
         self.follow = QCheckBox("Follow OBS: select the table whose source goes on air")
         self.follow.toggled.connect(lambda on: None if self._building else model.set_follow_obs(on))
         root.addWidget(self.follow)
+        # OBS WebSocket connection
+        root.addWidget(hline())
+        root.addWidget(caption("OBS connection (WebSocket)"))
+        self.obs_on = QCheckBox("Connect to OBS to know which scene is live")
+        self.obs_on.toggled.connect(self._obs_edited)
+        root.addWidget(self.obs_on)
+        o = QHBoxLayout()
+        self.obs_host = QLineEdit(); self.obs_host.setPlaceholderText("127.0.0.1")
+        self.obs_port = QSpinBox(); self.obs_port.setRange(1, 65535)
+        self.obs_pw = QLineEdit(); self.obs_pw.setEchoMode(QLineEdit.EchoMode.Password)
+        self.obs_pw.setPlaceholderText("Password")
+        o.addWidget(self.obs_host, 3); o.addWidget(QLabel(":")); o.addWidget(self.obs_port, 2)
+        o.addWidget(self.obs_pw, 3)
+        root.addLayout(o)
+        for w in (self.obs_host, self.obs_pw):
+            w.editingFinished.connect(self._obs_edited)
+        self.obs_port.editingFinished.connect(self._obs_edited)
+        self.obs_status = QLabel()
+        self.obs_status.setWordWrap(True)
+        root.addWidget(self.obs_status)
+        obs_hint = QLabel("In OBS: Tools > WebSocket Server Settings > enable it, set a password.")
+        obs_hint.setProperty("role", "caption"); obs_hint.setWordWrap(True)
+        root.addWidget(obs_hint)
+
         self.air_label = QLabel()
         self.air_label.setProperty("role", "caption")
         root.addWidget(self.air_label)
@@ -221,6 +245,10 @@ class ControlWindow(QWidget):
         self.volume.setValue(m.volume)
         self.mute.setChecked(m.muted)
         self.follow.setChecked(m.follow_obs)
+        self.obs_on.setChecked(m.obs_enabled)
+        self.obs_host.setText(m.obs_host)
+        self.obs_port.setValue(m.obs_port)
+        self.obs_pw.setText(m.obs_password)
         self._building = False
         self.sounds.volume, self.sounds.muted = m.volume, m.muted
 
@@ -229,6 +257,11 @@ class ControlWindow(QWidget):
             return
         total = self.min_spin.value() * 60 + self.sec_spin.value()
         self.model.set_timing(max(total, 1), self.eg_spin.value())
+
+    def _obs_edited(self) -> None:
+        if not self._building:
+            self.model.set_obs_config(self.obs_on.isChecked(), self.obs_host.text(),
+                                      self.obs_port.value(), self.obs_pw.text())
 
     def _countdown_edited(self) -> None:
         if self._building:
@@ -277,7 +310,14 @@ class ControlWindow(QWidget):
         self._update_save_state()
         self.url_edit.setText(self._table_url())
         names = [m.display_name(i) for i, t in enumerate(m.tables) if t.id in air]
-        self.air_label.setText("ON AIR IN OBS: " + (", ".join(names) if names else "none reported"))
+        scene = f" (live scene: {m.obs_scene})" if m.obs_connected and m.obs_scene else ""
+        self.air_label.setText("ON AIR IN OBS: " + (", ".join(names) if names else "none") + scene)
+        if m.obs_connected:
+            self.obs_status.setText(f"\u25CF Connected - live scene: {m.obs_scene or '?'}")
+            self.obs_status.setStyleSheet(f"color: {theme.LEAF.name()}; font-weight: 700;")
+        else:
+            self.obs_status.setText(f"\u25CB {m.obs_message}" + ("  (using page reports instead)" if m.obs_enabled else ""))
+            self.obs_status.setStyleSheet("")
         self._refresh()
 
     def _refresh(self) -> None:

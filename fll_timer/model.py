@@ -145,6 +145,17 @@ class AppModel(QObject):
                        for i, n in zip(ids, names)]
         self.current_index = min(max(int(self._s.value("current", 0)), 0), len(self.tables) - 1)
 
+        # OBS WebSocket (optional): when connected it is the authority on what is on air.
+        self.obs_enabled = int(self._s.value("obs_enabled", 0)) == 1
+        self.obs_host = str(self._s.value("obs_host", "127.0.0.1"))
+        self.obs_port = int(self._s.value("obs_port", 4455))
+        self.obs_password = str(self._s.value("obs_password", ""))
+        self.obs_connected = False
+        self.obs_message = "Off"
+        self.obs_scene = ""
+        self.obs_live: frozenset[str] = frozenset()
+        self.obs_scene_tables: dict[str, list[str]] = {}
+
         self._active: dict[str, float] = {}              # table id -> last OBS report time
         self._air_snapshot: frozenset[str] = frozenset()
 
@@ -165,6 +176,8 @@ class AppModel(QObject):
         return next((i for i, t in enumerate(self.tables) if t.id == tid), -1)
 
     def on_air_ids(self) -> frozenset[str]:
+        if self.obs_connected:                      # OBS WebSocket is authoritative
+            return self.obs_live
         now = time.monotonic()
         return frozenset(t for t, ts in self._active.items() if now - ts < ACTIVE_TTL)
 
@@ -180,6 +193,31 @@ class AppModel(QObject):
         if active and not was_air and self.follow_obs and i >= 0:
             self.select(i)                               # newly on air -> take focus
         self._notify_air()
+
+    def set_obs_state(self, st: dict) -> None:
+        """Called with each update from the OBS WebSocket client."""
+        before = self.on_air_ids()
+        self.obs_connected = bool(st["connected"])
+        self.obs_message = st["message"]
+        self.obs_scene = st["scene"]
+        self.obs_live = frozenset(st["live_ids"])
+        self.obs_scene_tables = st.get("scene_tables", {})
+        after = self.on_air_ids()
+        if self.follow_obs and after:
+            # Prefer a table that just went on air; otherwise, if the selected table is no
+            # longer on air, take the first one that is.
+            want = (after - before) or (after if self.current.id not in after else frozenset())
+            for i, t in enumerate(self.tables):
+                if t.id in want:
+                    self.select(i)
+                    break
+        self._air_snapshot = after
+        self.tablesChanged.emit()
+
+    def set_obs_config(self, enabled: bool, host: str, port: int, password: str) -> None:
+        self.obs_enabled, self.obs_host, self.obs_port, self.obs_password = enabled, host.strip() or "127.0.0.1", port, password
+        self._save()
+        self.configChanged.emit()
 
     def _notify_air(self) -> None:
         now = self.on_air_ids()
@@ -291,4 +329,8 @@ class AppModel(QObject):
         s.setValue("muted", 1 if self.muted else 0)
         s.setValue("follow_obs", 1 if self.follow_obs else 0)
         s.setValue("countdown", self.countdown)
+        s.setValue("obs_enabled", 1 if self.obs_enabled else 0)
+        s.setValue("obs_host", self.obs_host)
+        s.setValue("obs_port", self.obs_port)
+        s.setValue("obs_password", self.obs_password)
         s.setValue("countdown_audio", self.countdown_audio)
